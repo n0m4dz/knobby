@@ -19,6 +19,7 @@ final class AudioController: ObservableObject {
     struct AppAudio: Identifiable {
         let pid: pid_t
         let objectID: AudioObjectID
+        let bundleID: String?
         let name: String
         let icon: NSImage?
         let isPlaying: Bool
@@ -26,6 +27,10 @@ final class AudioController: ObservableObject {
         var redirectUID: String?
 
         var id: pid_t { pid }
+
+        var wantsEngine: Bool {
+            abs(volume - 1) > 0.001 || redirectUID != nil
+        }
     }
 
     @Published private(set) var devices: [AudioDevice] = []
@@ -256,12 +261,14 @@ final class AudioController: ObservableObject {
     func setAppVolume(_ pid: pid_t, _ volume: Float) {
         guard let index = apps.firstIndex(where: { $0.pid == pid }) else { return }
         apps[index].volume = volume
+        persistAppSettings(apps[index])
         applyAppEngine(apps[index])
     }
 
     func setAppRedirect(_ pid: pid_t, _ uid: String?) {
         guard let index = apps.firstIndex(where: { $0.pid == pid }) else { return }
         apps[index].redirectUID = uid
+        persistAppSettings(apps[index])
         applyAppEngine(apps[index])
     }
 
@@ -270,6 +277,7 @@ final class AudioController: ObservableObject {
     private func refreshAll() {
         refreshDevices()
         refreshApps()
+        reconcileAppEngineRouting()
         applySystemEngine()
     }
 
@@ -291,19 +299,34 @@ final class AudioController: ObservableObject {
 
     private func handleDefaultOutputChange() {
         // Software volume is per-device: drop the old engine, a new one is
-        // built lazily by applySystemEngine when needed.
+        // built lazily by applySystemEngine when needed. App engines are
+        // rerouted by reconcileAppEngineRouting on the same refresh pass.
         systemEngine?.stop()
         systemEngine = nil
         systemEngineExcludes = []
+    }
 
-        guard let uid = lastDefaultOutputUID else { return }
-        for app in apps where app.redirectUID == nil {
-            if let engine = appEngines[app.pid] {
-                do {
-                    try engine.start(outputDeviceUID: uid)
-                } catch {
-                    reportEngineError(error)
-                }
+    /// The device an app's engine should route to: the redirect target while
+    /// it is present, otherwise the current default output.
+    private func effectiveOutputUID(for app: AppAudio) -> String? {
+        if let redirect = app.redirectUID, devices.contains(where: { $0.uid == redirect }) {
+            return redirect
+        }
+        return AudioDevice.uid(of: defaultOutputID)
+    }
+
+    /// Keeps every app engine pointed at a device that still exists — covers
+    /// both a changed default output and an unplugged redirect target (the
+    /// redirect is kept as intent and re-applied when the device returns).
+    private func reconcileAppEngineRouting() {
+        for app in apps {
+            guard let engine = appEngines[app.pid],
+                  let targetUID = effectiveOutputUID(for: app),
+                  engine.outputUID != targetUID else { continue }
+            do {
+                try engine.start(outputDeviceUID: targetUID)
+            } catch {
+                reportEngineError(error)
             }
         }
     }
@@ -360,14 +383,20 @@ final class AudioController: ObservableObject {
             let hasEngine = appEngines[pid] != nil
             guard process.isRunningOutput || hasEngine || sessionActivePIDs.contains(pid) else { continue }
             let previous = apps.first { $0.pid == pid }
+            // First sighting this session: restore the persisted settings.
+            let volume = previous?.volume ?? persistedAppVolume(for: process.bundleID)
+            let redirectUID = previous != nil
+                ? previous?.redirectUID
+                : persistedAppRedirect(for: process.bundleID)
             newApps.append(AppAudio(
                 pid: pid,
                 objectID: process.objectID,
+                bundleID: process.bundleID,
                 name: running.localizedName ?? process.bundleID ?? "PID \(pid)",
                 icon: running.icon,
                 isPlaying: process.isRunningOutput,
-                volume: previous?.volume ?? 1,
-                redirectUID: previous?.redirectUID))
+                volume: volume,
+                redirectUID: redirectUID))
         }
         newApps.sort {
             if $0.isPlaying != $1.isPlaying { return $0.isPlaying }
@@ -379,14 +408,19 @@ final class AudioController: ObservableObject {
             appEngines.removeValue(forKey: pid)?.stop()
             sessionActivePIDs.remove(pid)
         }
+
+        // Restored (persisted) settings need their engine brought up — the
+        // user set nothing this session, so nobody else will create it.
+        for app in apps where app.wantsEngine && appEngines[app.pid] == nil {
+            applyAppEngine(app)
+        }
     }
 
     // MARK: - Engines
 
     private func applyAppEngine(_ app: AppAudio) {
-        let wantsEngine = abs(app.volume - 1) > 0.001 || app.redirectUID != nil
-        if wantsEngine {
-            guard let targetUID = app.redirectUID ?? AudioDevice.uid(of: defaultOutputID) else { return }
+        if app.wantsEngine {
+            guard let targetUID = effectiveOutputUID(for: app) else { return }
             if let engine = appEngines[app.pid] {
                 if engine.outputUID != targetUID {
                     do {
@@ -480,7 +514,9 @@ final class AudioController: ObservableObject {
         }
         for app in apps {
             guard let engine = appEngines[app.pid] else { continue }
-            let targetsDefault = app.redirectUID == nil || app.redirectUID == defaultUID
+            // Base this on where the engine actually routes (a missing
+            // redirect target falls back to the default output).
+            let targetsDefault = engine.outputUID == nil || engine.outputUID == defaultUID
             engine.gain = app.volume * (targetsDefault ? systemGain : 1)
         }
     }
@@ -494,6 +530,43 @@ final class AudioController: ObservableObject {
     private func softwareVolume(for uid: String) -> Float {
         guard defaults.object(forKey: softwareVolumeKey(uid)) != nil else { return 1 }
         return defaults.float(forKey: softwareVolumeKey(uid))
+    }
+
+    // MARK: - Per-app persistence
+
+    /// Per-app volume/redirect is keyed by bundle ID so it survives both app
+    /// and Knobby relaunches (PIDs don't). Unity volume / no redirect clears
+    /// the keys, so defaults only holds apps the user actually adjusted.
+    private func appVolumeKey(_ bundleID: String) -> String {
+        "appVolume.\(bundleID)"
+    }
+
+    private func appRedirectKey(_ bundleID: String) -> String {
+        "appRedirect.\(bundleID)"
+    }
+
+    private func persistedAppVolume(for bundleID: String?) -> Float {
+        guard let bundleID, defaults.object(forKey: appVolumeKey(bundleID)) != nil else { return 1 }
+        return min(max(defaults.float(forKey: appVolumeKey(bundleID)), 0), 1)
+    }
+
+    private func persistedAppRedirect(for bundleID: String?) -> String? {
+        guard let bundleID else { return nil }
+        return defaults.string(forKey: appRedirectKey(bundleID))
+    }
+
+    private func persistAppSettings(_ app: AppAudio) {
+        guard let bundleID = app.bundleID else { return }
+        if abs(app.volume - 1) > 0.001 {
+            defaults.set(app.volume, forKey: appVolumeKey(bundleID))
+        } else {
+            defaults.removeObject(forKey: appVolumeKey(bundleID))
+        }
+        if let redirect = app.redirectUID {
+            defaults.set(redirect, forKey: appRedirectKey(bundleID))
+        } else {
+            defaults.removeObject(forKey: appRedirectKey(bundleID))
+        }
     }
 
     // MARK: - HAL listeners

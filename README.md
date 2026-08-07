@@ -24,7 +24,7 @@ Displays that already have hardware volume keep their native keys and bezel — 
 
 Every app that plays audio gets its own volume slider. Turn the meeting up and the music down — without touching either app.
 
-And when one app belongs somewhere else, **redirect it**: send your browser to the display speakers while everything else stays on your headphones. Per-app taps are exclusion-aware, so audio is never double-rendered, and software volume per device is remembered across launches.
+And when one app belongs somewhere else, **redirect it**: send your browser to the display speakers while everything else stays on your headphones. Per-app taps are exclusion-aware, so audio is never double-rendered. Per-app volumes and redirects are remembered across launches (keyed by bundle ID), and if a redirect target is unplugged, audio falls back to the default output until the device returns.
 
 ## Everything in one panel
 
@@ -42,13 +42,9 @@ Knobby uses macOS audio taps, which require the **System Audio Recording** permi
 
 Free and open source. Grab the latest `Knobby-x.y.z.zip` from [Releases](https://github.com/n0m4dz/knobby/releases), unzip it, and move `Knobby.app` to `/Applications`.
 
-The app is ad-hoc signed (not notarized), so macOS quarantines downloaded copies. Clear the flag once:
+Releases from **1.1.0 onward are Developer ID signed and notarized** — they launch normally with no extra steps.
 
-```sh
-xattr -cr /Applications/Knobby.app
-```
-
-then launch it normally. (Right-click › Open also works on some macOS versions.)
+Older releases (1.0.x) were ad-hoc signed, so macOS quarantines downloaded copies; clear the flag once with `xattr -cr /Applications/Knobby.app` (or right-click › Open).
 
 **Requires macOS 14.4 or later** (Core Audio process tap API). On first use, macOS will ask for the permissions above in System Settings › Privacy & Security.
 
@@ -68,6 +64,21 @@ To make a proper app bundle:
 ```
 
 Move `build/Knobby.app` to `/Applications`, launch it, and optionally add it to Login Items.
+
+### Releasing (signing + notarization)
+
+`make-app.sh` automatically picks up a **Developer ID Application** certificate from the keychain (override with `SIGN_IDENTITY="Developer ID Application: …"`), signing with the hardened runtime and the audio-input entitlement. Without a certificate it falls back to ad-hoc signing for local use.
+
+To notarize a release build:
+
+```sh
+# one-time: store notary credentials (app-specific password from appleid.apple.com)
+xcrun notarytool store-credentials knobby-notary \
+    --apple-id "you@example.com" --team-id "TEAMID10" --password "xxxx-xxxx-xxxx-xxxx"
+
+./scripts/make-app.sh
+./scripts/notarize.sh   # submits, staples, and produces build/Knobby-<version>.zip
+```
 
 ## Under the hood
 
