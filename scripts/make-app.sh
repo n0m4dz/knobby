@@ -11,6 +11,8 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 cp .build/release/Knobby "$APP/Contents/MacOS/Knobby"
 cp Sources/Knobby/Resources/Info.plist "$APP/Contents/Info.plist"
+mkdir -p "$APP/Contents/Resources"
+cp Sources/Knobby/Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 # Stable designated requirement: TCC grants survive rebuilds.
 codesign --force --sign - \
     --identifier "$IDENTIFIER" \

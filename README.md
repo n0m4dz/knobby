@@ -1,46 +1,58 @@
 # Knobby
 
-A free, personal SoundSource-style menu bar audio controller for macOS, written in Swift/SwiftUI on top of the Core Audio HAL.
+**Take control of every sound on your Mac.**
+
+External audio controller for macOS, built on the Core Audio HAL. Volume for displays that never had it, a personal mixer for every app, and audio routing — all from your menu bar.
 
 <p align="center">
   <img src="docs/screenshot.png" width="360" alt="Knobby menu bar panel">
 </p>
 
-Built for the clamshell-Mac-with-external-displays setup: HDMI / DisplayPort / USB-C display speakers have no hardware volume control, so Knobby provides **software volume** for them via Core Audio process taps — the same mechanism it uses for per-app volume and per-app output redirection.
+## Volume for displays that don't have it
 
-## Features
+Using a MacBook in clamshell mode with an external monitor? HDMI, DisplayPort, and USB-C display speakers have no hardware volume control — macOS simply greys out your volume keys. Knobby fixes that with true **software volume**, powered by Core Audio process taps.
 
-- **Menu bar panel** (no Dock icon) with System and Applications sections.
-- **System devices** — pick the Output, Input, and Sound Effects device; adjust volume and mute.
-  - Devices without hardware volume (HDMI/DisplayPort displays) automatically get a software volume slider, implemented with a global audio tap. Software volume per device is remembered across launches.
-- **Per-app volume** — every app that plays audio shows up with its own slider (Core Audio process tap per app).
-- **Per-app redirect** — send any app's audio to a different output device.
-- **Keyboard volume keys for HDMI/DisplayPort** — macOS disables the volume keys for displays without hardware volume; Knobby intercepts them (CGEventTap), adjusts the software volume, and shows its own volume bezel. Devices with hardware volume keep the native keys and bezel untouched.
-- The per-app taps and the global software-volume tap are exclusion-aware, so audio is never double-rendered.
-- **Settings** (⚙ in the panel header):
-  - **Launch at Login** (uses `SMAppService`; works when running the bundled app, not `swift run`).
-  - **Show volume HUD** — toggle Knobby's volume bezel on/off.
-  - **Fine volume key steps** — ~3% per key press instead of the macOS-style ~6%.
-  - **Menu bar icon** — pick from several icon styles.
+Your keyboard volume keys work again, complete with a native-style HUD that glides just like the system bezel:
 
-## Install
+<p align="center">
+  <img src="docs/hud.png" width="245" alt="Knobby volume HUD">
+</p>
 
-1. Download the latest `Knobby-x.y.z.zip` from [Releases](https://github.com/n0m4dz/knobby/releases), unzip it, and move `Knobby.app` to `/Applications`.
-2. The app is ad-hoc signed (not notarized), so macOS quarantines downloaded copies. Clear the quarantine flag once:
+Displays that already have hardware volume keep their native keys and bezel — Knobby stays out of the way.
 
-   ```sh
-   xattr -cr /Applications/Knobby.app
-   ```
+## A mixer for every app
 
-   then launch it normally. (Right-click › Open also works on some macOS versions.)
+Every app that plays audio gets its own volume slider. Turn the meeting up and the music down — without touching either app.
 
-## Requirements
+And when one app belongs somewhere else, **redirect it**: send your browser to the display speakers while everything else stays on your headphones. Per-app taps are exclusion-aware, so audio is never double-rendered, and software volume per device is remembered across launches.
 
-- macOS 14.4 or later (Core Audio process tap API).
-- **System Audio Recording permission** — the first time you adjust an app's volume or use software volume, macOS asks for permission (System Settings › Privacy & Security › Screen & System Audio Recording). This is required for taps; nothing is recorded or stored.
-- **Accessibility permission** — needed only for the keyboard volume keys on HDMI/DisplayPort outputs (System Settings › Privacy & Security › Accessibility). When running via `swift run`, grant it to the process macOS shows (it may attribute the prompt to your terminal/editor); the bundled app from `make-app.sh` gets its own clean entry.
+## Everything in one panel
 
-## Build & run
+- **Output, Input, and Sound Effects** device pickers with volume and mute — no more digging through System Settings.
+- **Menu bar only** — no Dock icon, no clutter.
+- **Launch at Login**, so it's always there.
+- **Your choice of menu bar icon** and an optional fine 3% volume step for precise control.
+- **Volume HUD** can be toggled off if you prefer silence to be silent.
+
+## Privacy
+
+Knobby uses macOS audio taps, which require the **System Audio Recording** permission — audio passes through only to have its volume adjusted; **nothing is ever recorded or stored**. The **Accessibility** permission is needed only to catch the keyboard volume keys. No analytics, no network access, no accounts.
+
+## Download
+
+Free and open source. Grab the latest `Knobby-x.y.z.zip` from [Releases](https://github.com/n0m4dz/knobby/releases), unzip it, and move `Knobby.app` to `/Applications`.
+
+The app is ad-hoc signed (not notarized), so macOS quarantines downloaded copies. Clear the flag once:
+
+```sh
+xattr -cr /Applications/Knobby.app
+```
+
+then launch it normally. (Right-click › Open also works on some macOS versions.)
+
+**Requires macOS 14.4 or later** (Core Audio process tap API). On first use, macOS will ask for the permissions above in System Settings › Privacy & Security.
+
+## Build from source
 
 ```sh
 ./scripts/run.sh       # build + sign + run (use this instead of `swift run`)
@@ -52,11 +64,12 @@ To make a proper app bundle:
 
 ```sh
 ./scripts/make-app.sh  # creates build/Knobby.app
+./scripts/make-icon.sh # re-renders Sources/Knobby/Resources/AppIcon.icns
 ```
 
 Move `build/Knobby.app` to `/Applications`, launch it, and optionally add it to Login Items.
 
-## How it works
+## Under the hood
 
 - System device state (device list, defaults, volumes) is read and written through the `AudioObject` property API (`Sources/Knobby/Core/CoreAudioSupport.swift`, `AudioDevice.swift`).
 - `TapEngine` (`Core/TapEngine.swift`) creates a `CATapDescription` (per-process, or global-excluding), mutes the tapped processes at the HAL, and plays the captured audio back through a private aggregate device with a gain applied in the IO proc.
