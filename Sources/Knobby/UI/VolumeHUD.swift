@@ -17,11 +17,20 @@ final class VolumeHUD {
     private var showGeneration = 0
 
     func show(volume: Float, muted: Bool) {
-        model.volume = volume
-        model.muted = muted
         showGeneration += 1
 
         let panel = ensurePanel()
+        // Animate the bar only while the HUD is on screen; a fresh appearance
+        // starts at the current value, like the native bezel.
+        if panel.isVisible {
+            withAnimation(.easeOut(duration: 0.15)) {
+                model.volume = volume
+                model.muted = muted
+            }
+        } else {
+            model.volume = volume
+            model.muted = muted
+        }
         position(panel)
         // Cancel any in-flight fade so a fresh show can't be ordered out by
         // the previous fade's completion.
@@ -91,8 +100,7 @@ struct VolumeHUDView: View {
             Image(systemName: symbol)
                 .font(.system(size: 16, weight: .medium))
                 .frame(width: 22)
-            ProgressView(value: Double(min(max(model.muted ? 0 : model.volume, 0), 1)))
-                .progressViewStyle(.linear)
+            volumeBar
             Text(model.muted ? "Muted" : "\(Int((model.volume * 100).rounded()))%")
                 .font(.caption.monospacedDigit())
                 .frame(width: 40, alignment: .trailing)
@@ -100,6 +108,25 @@ struct VolumeHUDView: View {
         .padding(.horizontal, 16)
         .frame(width: 240, height: 52)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private var fraction: CGFloat {
+        CGFloat(min(max(model.muted ? 0 : model.volume, 0), 1))
+    }
+
+    // ProgressView doesn't reliably animate value changes, so draw the bar
+    // ourselves; the fill width picks up the transaction from show().
+    private var volumeBar: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(.primary.opacity(0.2))
+                Capsule()
+                    .fill(.primary)
+                    .frame(width: fraction > 0 ? max(geo.size.width * fraction, 6) : 0)
+            }
+        }
+        .frame(height: 6)
     }
 
     private var symbol: String {
